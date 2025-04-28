@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Video Streaming</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        #videoContainer {
+            margin-bottom: 20px;
+        }
+        video, canvas {
+            width: 100%;
+            max-width: 640px;
+            border: 1px solid #ccc;
+        }
+        canvas {
+            display: none;
+        }
+        #controls {
+            margin: 20px 0;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f0f0;
+        }
+        #peopleCount {
+            font-size: 24px;
+            margin-top: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>IoT Video People Counter</h1>
+    
+    <div id="videoContainer">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+    
+    <div id="controls">
+        <button id="startBtn">Start Streaming</button>
+        <button id="stopBtn" disabled>Stop Streaming</button>
+    </div>
+    
+    <div id="status">Status: Idle</div>
+    
+    <div id="peopleCount">People detected: -</div>
+    
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusDisplay = document.getElementById('status');
+        const peopleCountDisplay = document.getElementById('peopleCount');
+        
+        let isStreaming = false;
+        let streamInterval;
+        const API_ENDPOINT = 'https://192.168.2.39:5001';
+        
+        // Get access to the camera
+        async function startVideo() {
+    try {
+        // Check if mediaDevices API is available
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('Your browser does not support camera access. Try using Chrome, Firefox, or Safari.');
+        }
+        const constraints = {
+            video: {
+                facingMode: { ideal: "environment" }
+            }
+        };
+        
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        
+        video.onloadedmetadata = () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        };
+        
+        statusDisplay.textContent = "Status: Camera ready";
+    } catch (err) {
+        console.error('Error accessing camera:', err);
+        statusDisplay.textContent = `Status: Error - ${err.message}`;
+    }
+}
+        
+        // Start streaming frames to server
+        function startStreaming() {
+            if (isStreaming) return;
+            
+            isStreaming = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            statusDisplay.textContent = "Status: Streaming...";
+            
+            // Send frames every 500ms
+            streamInterval = setInterval(() => {
+                // Draw current video frame to canvas
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Get frame as data URL and send to server
+                const frameData = canvas.toDataURL('image/jpeg', 0.7);
+                
+                // Send to backend
+                fetch(`${API_ENDPOINT}/send-frame`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ frame: frameData }),
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        statusDisplay.textContent = "Status: Frame sent successfully";
+                    } else {
+                        statusDisplay.textContent = "Status: Error sending frame";
+                    }
+                })
+                .catch(error => {
+                    console.error('Error sending frame:', error);
+                    statusDisplay.textContent = "Status: Connection error";
+                });
+            }, 500);
+            
+            // Start polling for results
+            pollResults();
+        }
+        
+        // Stop streaming
+        function stopStreaming() {
+            clearInterval(streamInterval);
+            isStreaming = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            statusDisplay.textContent = "Status: Stopped";
+        }
+        
+        // Poll for detection results
+        function pollResults() {
+            if (!isStreaming) return;
+            
+            fetch(`${API_ENDPOINT}/get-results`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.count !== undefined) {
+                        peopleCountDisplay.textContent = `People detected: ${data.count}`;
+                    }
+                    // Poll again after a short delay
+                    setTimeout(pollResults, 1000);
+                })
+                .catch(error => {
+                    console.error('Error polling results:', error);
+                    setTimeout(pollResults, 2000); // Retry after a longer delay on error
+                });
+        }
+        
+        // Event listeners
+        startBtn.addEventListener('click', startStreaming);
+        stopBtn.addEventListener('click', stopStreaming);
+        
+        // Initialize camera on page load
+        document.addEventListener('DOMContentLoaded', startVideo);
+    </script>
+</body>
+</html>
