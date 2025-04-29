@@ -26,6 +26,7 @@ producer = KafkaProducer(
 
 # Global variable to store the latest detection results
 latest_results = {"count": 0, "timestamp": None}
+latest_results = {}
 
 # Load a pre-trained model for person detection
 # We'll use SSD MobileNet from TensorFlow
@@ -96,24 +97,22 @@ def kafka_consumer_thread():
             people_count = count_people(frame_data)
             
             # Update latest results
-            global latest_results
-            latest_results = {
-                "count": people_count,
-                "timestamp": datetime.now().isoformat(),
-                "client_id": client_id
-            }
+            latest_results[client_id] = {
+                    "count": people_count,
+                    "timestamp": datetime.now().isoformat()
+                }
             
             # Send results to Kafka
             producer.send('detection-results', {
                 "count": people_count,
-                "timestamp": latest_results["timestamp"],
+                "timestamp": latest_results[client_id]["timestamp"],
                 "client_id": client_id
             })
             
             print(f"Detected {people_count} people for client {client_id}")
             
         except Exception as e:
-            print(f"Error processing frame: {e}")
+            print(f"KAFKA Error processing frame: {e}")
 
 # Start Kafka consumer thread
 consumer_thread = threading.Thread(target=kafka_consumer_thread)
@@ -125,12 +124,10 @@ def send_frame():
     try:
         data = request.json
         frame_data = data.get('frame')
+        client_id = data.get('client_id')
         
-        if not frame_data:
-            return jsonify({"success": False, "error": "No frame data provided"}), 400
-        
-        # Generate a client ID or use one from the request
-        client_id = data.get('client_id', request.remote_addr)
+        if not frame_data or not client_id:
+            return jsonify({"success": False, "error": "Missing frame or client_id"}), 400
         
         # Send frame to Kafka
         producer.send('video-frames', {
@@ -147,8 +144,19 @@ def send_frame():
 
 @app.route('/get-results', methods=['GET'])
 def get_results():
-    # Return the latest detection results
-    return jsonify(latest_results)
+    client_id = request.args.get('client_id')
+    if not client_id:
+        return jsonify({"success": False, "error": "Missing client_id"}), 400
+    result= latest_results.get(client_id)
+
+    if result:
+        return jsonify({
+            "count": result["count"],
+            "timestamp": result["timestamp"]
+        })
+    else:
+        return jsonify({ "count": 0, "timestamp": None})
+        
 
 if __name__ == '__main__':
     # Download the model if needed
